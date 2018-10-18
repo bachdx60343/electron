@@ -17,11 +17,13 @@
 #include "atom/browser/atom_browser_context.h"
 #include "atom/browser/atom_browser_main_parts.h"
 #include "atom/browser/atom_navigation_throttle.h"
+#include "atom/browser/atom_paths.h"
 #include "atom/browser/atom_quota_permission_context.h"
 #include "atom/browser/atom_resource_dispatcher_host_delegate.h"
 #include "atom/browser/atom_speech_recognition_manager_delegate.h"
 #include "atom/browser/child_web_contents_tracker.h"
 #include "atom/browser/io_thread.h"
+#include "atom/browser/media/media_capture_devices_dispatcher.h"
 #include "atom/browser/native_window.h"
 #include "atom/browser/notifications/notification_presenter.h"
 #include "atom/browser/notifications/platform_notification_service.h"
@@ -37,7 +39,9 @@
 #include "base/environment.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
+#include "base/lazy_instance.h"
 #include "base/no_destructor.h"
+#include "base/path_service.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -120,6 +124,18 @@ bool IsSameWebSite(content::BrowserContext* browser_context,
              src_url;
 }
 
+AtomBrowserClient* g_browser_client = nullptr;
+
+base::LazyInstance<std::string>::DestructorAtExit
+    g_io_thread_application_locale = LAZY_INSTANCE_INITIALIZER;
+
+base::NoDestructor<std::string> g_application_locale;
+
+void SetApplicationLocaleOnIOThread(const std::string& locale) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  g_io_thread_application_locale.Get() = locale;
+}
+
 }  // namespace
 
 // static
@@ -132,9 +148,32 @@ void AtomBrowserClient::SetCustomServiceWorkerSchemes(
   *g_custom_service_worker_schemes = base::JoinString(schemes, ",");
 }
 
-AtomBrowserClient::AtomBrowserClient() {}
+AtomBrowserClient* AtomBrowserClient::Get() {
+  return g_browser_client;
+}
 
-AtomBrowserClient::~AtomBrowserClient() {}
+// static
+void AtomBrowserClient::SetApplicationLocale(const std::string& locale) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  if (!BrowserThread::IsThreadInitialized(BrowserThread::IO) ||
+      !BrowserThread::PostTask(
+          BrowserThread::IO, FROM_HERE,
+          base::BindOnce(&SetApplicationLocaleOnIOThread, locale))) {
+    g_io_thread_application_locale.Get() = locale;
+  }
+  *g_application_locale = locale;
+}
+
+AtomBrowserClient::AtomBrowserClient() {
+  DCHECK(!g_browser_client);
+  g_browser_client = this;
+}
+
+AtomBrowserClient::~AtomBrowserClient() {
+  DCHECK(g_browser_client);
+  g_browser_client = nullptr;
+}
 
 content::WebContents* AtomBrowserClient::GetWebContentsFromProcessID(
     int process_id) {
@@ -578,7 +617,7 @@ net::NetLog* AtomBrowserClient::GetNetLog() {
   return AtomBrowserMainParts::Get()->net_log();
 }
 
-brightray::BrowserMainParts* AtomBrowserClient::OverrideCreateBrowserMainParts(
+content::BrowserMainParts* AtomBrowserClient::CreateBrowserMainParts(
     const content::MainFunctionParams& params) {
   return new AtomBrowserMainParts(params);
 }
@@ -683,6 +722,10 @@ AtomBrowserClient::CreateThrottlesForNavigation(
   return throttles;
 }
 
+content::MediaObserver* AtomBrowserClient::GetMediaObserver() {
+  return MediaCaptureDevicesDispatcher::GetInstance();
+}
+
 content::DevToolsManagerDelegate*
 AtomBrowserClient::GetDevToolsManagerDelegate() {
   return new DevToolsManagerDelegate;
@@ -701,6 +744,21 @@ AtomBrowserClient::GetPlatformNotificationService() {
     notification_service_.reset(new PlatformNotificationService(this));
   }
   return notification_service_.get();
+}
+
+base::FilePath AtomBrowserClient::GetDefaultDownloadDirectory() {
+  // ~/Downloads
+  base::FilePath path;
+  if (base::PathService::Get(base::DIR_HOME, &path))
+    path = path.Append(FILE_PATH_LITERAL("Downloads"));
+
+  return path;
+}
+
+std::string AtomBrowserClient::GetApplicationLocale() {
+  if (BrowserThread::CurrentlyOn(BrowserThread::IO))
+    return g_io_thread_application_locale.Get();
+  return *g_application_locale;
 }
 
 }  // namespace atom

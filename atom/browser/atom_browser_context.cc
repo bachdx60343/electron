@@ -9,6 +9,7 @@
 #include "atom/browser/atom_blob_reader.h"
 #include "atom/browser/atom_browser_main_parts.h"
 #include "atom/browser/atom_download_manager_delegate.h"
+#include "atom/browser/atom_paths.h"
 #include "atom/browser/atom_permission_manager.h"
 #include "atom/browser/browser.h"
 #include "atom/browser/cookie_change_notifier.h"
@@ -17,6 +18,8 @@
 #include "atom/browser/special_storage_policy.h"
 #include "atom/browser/ui/inspectable_web_contents_impl.h"
 #include "atom/browser/web_view_manager.h"
+#include "atom/browser/zoom_level_delegate.h"
+#include "atom/common/application_info.h"
 #include "atom/common/atom_version.h"
 #include "atom/common/chrome_version.h"
 #include "atom/common/options_switches.h"
@@ -27,9 +30,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread_restrictions.h"
-#include "brightray/browser/brightray_paths.h"
-#include "brightray/browser/zoom_level_delegate.h"
-#include "brightray/common/application_info.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -100,11 +100,10 @@ AtomBrowserContext::AtomBrowserContext(const std::string& partition,
   base::StringToInt(command_line->GetSwitchValueASCII(switches::kDiskCacheSize),
                     &max_cache_size_);
 
-  if (!base::PathService::Get(brightray::DIR_USER_DATA, &path_)) {
-    base::PathService::Get(brightray::DIR_APP_DATA, &path_);
-    path_ = path_.Append(
-        base::FilePath::FromUTF8Unsafe(brightray::GetApplicationName()));
-    base::PathService::Override(brightray::DIR_USER_DATA, path_);
+  if (!base::PathService::Get(DIR_USER_DATA, &path_)) {
+    base::PathService::Get(DIR_APP_DATA, &path_);
+    path_ = path_.Append(base::FilePath::FromUTF8Unsafe(GetApplicationName()));
+    base::PathService::Override(DIR_USER_DATA, path_);
   }
 
   if (!in_memory && !partition.empty())
@@ -153,8 +152,8 @@ void AtomBrowserContext::InitPrefs() {
                                  download_dir);
   registry->RegisterDictionaryPref(prefs::kDevToolsFileSystemPaths);
   InspectableWebContentsImpl::RegisterPrefs(registry.get());
-  brightray::MediaDeviceIDSalt::RegisterPrefs(registry.get());
-  brightray::ZoomLevelDelegate::RegisterPrefs(registry.get());
+  MediaDeviceIDSalt::RegisterPrefs(registry.get());
+  ZoomLevelDelegate::RegisterPrefs(registry.get());
   PrefProxyConfigTrackerImpl::RegisterPrefs(registry.get());
 
   prefs_ = prefs_factory.Create(
@@ -210,7 +209,7 @@ content::ResourceContext* AtomBrowserContext::GetResourceContext() {
 
 std::string AtomBrowserContext::GetMediaDeviceIDSalt() {
   if (!media_device_id_salt_.get())
-    media_device_id_salt_.reset(new brightray::MediaDeviceIDSalt(prefs_.get()));
+    media_device_id_salt_.reset(new MediaDeviceIDSalt(prefs_.get()));
   return media_device_id_salt_->GetSalt();
 }
 
@@ -218,8 +217,7 @@ std::unique_ptr<content::ZoomLevelDelegate>
 AtomBrowserContext::CreateZoomLevelDelegate(
     const base::FilePath& partition_path) {
   if (!IsOffTheRecord()) {
-    return std::make_unique<brightray::ZoomLevelDelegate>(prefs(),
-                                                          partition_path);
+    return std::make_unique<ZoomLevelDelegate>(prefs(), partition_path);
   }
   return std::unique_ptr<content::ZoomLevelDelegate>();
 }
